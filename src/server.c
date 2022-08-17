@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,13 +16,18 @@
 typedef struct epoll_event epoll_event;
 typedef struct sockaddr_in sockaddr_in;
 
+typedef struct ReadCtx {
+  int epfd;
+  int clifd;
+} ReadCtx;
+
 const int BUF_SIZE = 4096;
 
 static void epoll_add_infd(int epfd, int fd);
 static void epoll_del_fd(int epfd, int fd);
-static void read_clifd(int epfd, int clifd, char *buf);
 static void accept_conn(int epfd, int listenfd);
-static void close_interstfd(int epfd, int fd);
+static int read_clifd(int epfd, int clifd, char *buf);
+static void *thread(void *arg);
 
 int echo() {
   const int epfd = epoll_create1(0);
@@ -35,8 +41,6 @@ int echo() {
   const int MAX_EVENTS = 10;
   epoll_event events[MAX_EVENTS];
 
-  char buf[BUF_SIZE];
-
   while (1) {
     const int nfds = epoll_wait(epfd, events, MAX_EVENTS, -1);
     if (nfds == -1) {
@@ -49,8 +53,20 @@ int echo() {
         accept_conn(epfd, listenfd);
         continue;
       }
+
       const int clifd = events[i].data.fd;
-      read_clifd(epfd, clifd, buf);
+      epoll_del_fd(epfd, clifd);
+      pthread_t tid;
+      ReadCtx *const ctx = (ReadCtx *)malloc(sizeof(ReadCtx));
+      {
+        ctx->epfd = epfd;
+        ctx->clifd = clifd;
+      }
+      const int err = pthread_create(&tid, NULL, thread, (void *)ctx);
+      if (err) {
+        fprintf(stderr, "pthread_create: %d\n", err);
+        exit(1);
+      }
     }
   }
   return 0;
@@ -74,36 +90,66 @@ static void epoll_del_fd(int epfd, int fd) {
   }
 }
 
-static void close_interstfd(int epfd, int fd) {
-  epoll_del_fd(epfd, fd);
-  close(fd);
+static void *thread(void *arg) {
+  const pthread_t tid = pthread_self();
+  fprintf(stderr, "thread begin: tid[%lu]\n", tid);
+  pthread_detach(tid);
+
+  const ReadCtx *ctx = (ReadCtx *)arg;
+  const int epfd = ctx->epfd;
+  const int clifd = ctx->clifd;
+
+  char *buf = (char *)malloc(BUF_SIZE);
+  const int closed = read_clifd(epfd, clifd, buf);
+
+  free(arg);
+  free(buf);
+  if (!closed) {
+    epoll_add_infd(epfd, clifd);
+  }
+  fprintf(stderr, "thread end: tid[%lu]\n", tid);
+  pthread_exit(NULL);
 }
 
-static void read_clifd(int epfd, int clifd, char *buf) {
-  const int read_size = read(clifd, buf, sizeof(buf));
+static int read_clifd(int epfd, int clifd, char *buf) {
+  int read_size = 0;
+  while ((read_size = read(clifd, buf, sizeof(buf))) > 0) {
+    if (buf[read_size - 1] == '\n') {
+      buf[read_size - 1] = '\0';
+    } else {
+      buf[read_size] = '\0';
+    }
+    fprintf(stdout, "recved msg: %s\n", buf);
+
+    if (strncmp(buf, "quit", sizeof("quit") - 1) == 0) {
+      // epoll automatically removes clifd from interest sets.
+      if (close(clifd) == -1) {
+        fprintf(stderr, "close: %s\n", strerror(errno));
+        exit(1);
+      }
+      fprintf(stdout, "quit connection: fd[%d]\n", clifd);
+      return 1;
+    }
+
+    if (strncmp(buf, "end", sizeof("end") - 1) == 0) {
+      break;
+    }
+  }
+
   if (read_size == -1) {
     fprintf(stderr, "recv: %s\n", strerror(errno));
     exit(1);
   }
-  if (read_size == 0) {  // close.
-    close_interstfd(epfd, clifd);
+  if (read_size == 0) {  // closed from client.
+    // epoll automatically removes clifd from interest sets.
+    if (close(clifd) == -1) {
+      fprintf(stderr, "close: %s\n", strerror(errno));
+      exit(1);
+    }
     fprintf(stdout, "close connection: fd[%d]\n", clifd);
-    return;
+    return 1;
   }
-
-  if (buf[read_size - 1] == '\n') {
-    buf[read_size - 1] = '\0';
-  } else {
-    buf[read_size] = '\0';
-  }
-  fprintf(stdout, "recved msg: %s\n", buf);
-
-  if (strncmp(buf, "quit", sizeof("quit") - 1) != 0) {
-    return;
-  }
-
-  epoll_del_fd(epfd, clifd);
-  close(clifd);
+  return 0;
 }
 
 static void accept_conn(int epfd, int listenfd) {
