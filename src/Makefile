@@ -1,7 +1,7 @@
-FLAGS = -Wall -c
+FLAGS = -Wall -c -g
 
 psrv: main.o server.o client.o sock_util.o
-	cc -Wall -o psrv main.o server.o client.o sock_util.o
+	cc -Wall -g -o psrv main.o server.o client.o sock_util.o
 
 main.o: main.c server.o client.o
 	cc $(FLAGS) -o main.o main.c
