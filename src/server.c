@@ -21,6 +21,7 @@ static void epoll_add_infd(int epfd, int fd);
 static void epoll_del_fd(int epfd, int fd);
 static void read_clifd(int epfd, int clifd, char *buf);
 static void accept_conn(int epfd, int listenfd);
+static void close_interstfd(int epfd, int fd);
 
 int echo() {
   const int epfd = epoll_create1(0);
@@ -73,11 +74,21 @@ static void epoll_del_fd(int epfd, int fd) {
   }
 }
 
+static void close_interstfd(int epfd, int fd) {
+  epoll_del_fd(epfd, fd);
+  close(fd);
+}
+
 static void read_clifd(int epfd, int clifd, char *buf) {
   const int read_size = read(clifd, buf, sizeof(buf));
   if (read_size == -1) {
     fprintf(stderr, "recv: %s\n", strerror(errno));
     exit(1);
+  }
+  if (read_size == 0) {  // close.
+    close_interstfd(epfd, clifd);
+    fprintf(stdout, "close connection: fd[%d]\n", clifd);
+    return;
   }
 
   if (buf[read_size - 1] == '\n') {
