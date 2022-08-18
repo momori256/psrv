@@ -13,11 +13,12 @@ int keep_sending_msg() {
     exit(1);
   }
 
-  const int BUF_SIZE = sizeof("cnt: -0123456789");
+  const int BUF_SIZE = sizeof("add -0123456789 -0123456789");
   char buf[BUF_SIZE];
   int cnt = 0;
   while (1) {
-    snprintf(buf, BUF_SIZE, "cnt: %d", cnt++);
+    snprintf(buf, BUF_SIZE, "add %d %d\r\n", cnt, cnt);
+    ++cnt;
     const int sentSize = send(connfd, buf, strlen(buf), 0);
     if (sentSize < 0) {
       fprintf(stderr, "send: %s\n", strerror(errno));

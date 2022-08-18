@@ -1,0 +1,1 @@
+int call_cmd(const char *const msg);

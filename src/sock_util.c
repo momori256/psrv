@@ -31,7 +31,7 @@ int create_connectfd(const char *const hostname, const char *const port) {
 
   const int sockfd = create_sockfd_client(addrhd);
   if (sockfd == -1) {
-    fprintf(stderr, "create_sockfd: %s\n", strerror(errno));
+    fprintf(stderr, "create_sockfd_client: %s\n", strerror(errno));
     exit(1);
   }
 
@@ -54,7 +54,7 @@ int create_listenfd(const char *const hostname, const char *const port) {
 
   const int sockfd = create_sockfd_server(addrhd);
   if (sockfd == -1) {
-    fprintf(stderr, "create_sockfd: %s\n", strerror(errno));
+    fprintf(stderr, "create_sockfd_server: %s\n", strerror(errno));
     exit(1);
   }
   freeaddrinfo(addrhd);
@@ -92,7 +92,7 @@ static int create_sockfd_client(const addrinfo *const addrhd) {
 
 static int create_sockfd_server(const addrinfo *const addrhd) {
   for (const addrinfo *p = addrhd; p != NULL; p = p->ai_next) {
-    int sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+    const int sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
     if (sockfd == -1) {
       continue;
     }

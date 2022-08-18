@@ -11,7 +11,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "cmd.h"
 #include "sock_util.h"
+
+#define USE_PTHREAD
 
 typedef struct epoll_event epoll_event;
 typedef struct sockaddr_in sockaddr_in;
@@ -26,10 +29,17 @@ const int BUF_SIZE = 4096;
 static void epoll_add_infd(int epfd, int fd);
 static void epoll_del_fd(int epfd, int fd);
 static void accept_conn(int epfd, int listenfd);
-static int read_clifd(int epfd, int clifd, char *buf);
+// static int read_clifd(int epfd, int clifd, char *buf);
+static int read_msg(int clifd, char *const buf);
 static void *thread(void *arg);
 
 int echo() {
+#ifdef USE_PTHREAD
+  printf("use pthread.\n");
+#else
+  printf("not use pthread.\n");
+#endif
+
   const int epfd = epoll_create1(0);
   if (epfd == -1) {
     fprintf(stderr, "epoll_create1: %s\n", strerror(errno));
@@ -56,17 +66,23 @@ int echo() {
 
       const int clifd = events[i].data.fd;
       epoll_del_fd(epfd, clifd);
-      pthread_t tid;
+
       ReadCtx *const ctx = (ReadCtx *)malloc(sizeof(ReadCtx));
       {
         ctx->epfd = epfd;
         ctx->clifd = clifd;
       }
+
+#ifdef USE_PTHREAD
+      pthread_t tid;
       const int err = pthread_create(&tid, NULL, thread, (void *)ctx);
       if (err) {
         fprintf(stderr, "pthread_create: %d\n", err);
         exit(1);
       }
+#else
+      thread((void *)ctx);
+#endif
     }
   }
   return 0;
@@ -95,52 +111,64 @@ static void *thread(void *arg) {
   fprintf(stderr, "thread begin: tid[%lu]\n", tid);
   pthread_detach(tid);
 
-  const ReadCtx *ctx = (ReadCtx *)arg;
+  const ReadCtx *const ctx = (ReadCtx *)arg;
   const int epfd = ctx->epfd;
   const int clifd = ctx->clifd;
 
-  char *buf = (char *)malloc(BUF_SIZE);
-  const int closed = read_clifd(epfd, clifd, buf);
+  char *buf = (char *)calloc(BUF_SIZE, sizeof(char));
+  const int closed = read_msg(clifd, buf);
+
+  if (!closed) {
+    const int res = call_cmd(buf);
+    char send[10];
+    sprintf(send, "%d\r\n", res);
+    write(clifd, send, strlen(send));
+
+    epoll_add_infd(epfd, clifd);
+  }
 
   free(arg);
   free(buf);
-  if (!closed) {
-    epoll_add_infd(epfd, clifd);
-  }
   fprintf(stderr, "thread end: tid[%lu]\n", tid);
+
+#ifdef USE_PTHREAD
   pthread_exit(NULL);
+#else
+  return NULL;
+#endif
 }
 
-static int read_clifd(int epfd, int clifd, char *buf) {
-  int read_size = 0;
-  while ((read_size = read(clifd, buf, sizeof(buf))) > 0) {
-    if (buf[read_size - 1] == '\n') {
-      buf[read_size - 1] = '\0';
-    } else {
-      buf[read_size] = '\0';
+static int endswith(const char *const s, const char *const end) {
+  const size_t elen = strlen(end);
+  const size_t slen = strlen(s);
+  if (slen < elen) {
+    return 0;
+  }
+  for (size_t i = 0; i < elen; ++i) {
+    if (s[i + slen - elen] != end[i]) {
+      return 0;
     }
-    fprintf(stdout, "recved msg: %s\n", buf);
+  }
+  return 1;
+}
 
-    if (strncmp(buf, "quit", sizeof("quit") - 1) == 0) {
-      // epoll automatically removes clifd from interest sets.
-      if (close(clifd) == -1) {
-        fprintf(stderr, "close: %s\n", strerror(errno));
-        exit(1);
-      }
-      fprintf(stdout, "quit connection: fd[%d]\n", clifd);
-      return 1;
-    }
-
-    if (strncmp(buf, "end", sizeof("end") - 1) == 0) {
+static int read_msg(int clifd, char *const buf) {
+  int ntotal = 0;
+  int nread = 0;
+  while ((nread = read(clifd, buf + ntotal, sizeof(buf))) > 0) {
+    ntotal += nread;
+    if (endswith(buf, "\r\n")) {
+      buf[ntotal] = '\0';
       break;
     }
   }
 
-  if (read_size == -1) {
+  printf("read_msg: %s\n", buf);
+  if (nread == -1) {
     fprintf(stderr, "recv: %s\n", strerror(errno));
     exit(1);
   }
-  if (read_size == 0) {  // closed from client.
+  if (nread == 0) {  // closed from client.
     // epoll automatically removes clifd from interest sets.
     if (close(clifd) == -1) {
       fprintf(stderr, "close: %s\n", strerror(errno));
@@ -151,6 +179,47 @@ static int read_clifd(int epfd, int clifd, char *buf) {
   }
   return 0;
 }
+
+// static int read_clifd(int epfd, int clifd, char *buf) {
+//   int read_size = 0;
+//   while ((read_size = read(clifd, buf, sizeof(buf))) > 0) {
+//     if (buf[read_size - 1] == '\n') {
+//       buf[read_size - 1] = '\0';
+//     } else {
+//       buf[read_size] = '\0';
+//     }
+//     fprintf(stdout, "recved msg: %s\n", buf);
+
+//     if (strncmp(buf, "quit", sizeof("quit") - 1) == 0) {
+//       // epoll automatically removes clifd from interest sets.
+//       if (close(clifd) == -1) {
+//         fprintf(stderr, "close: %s\n", strerror(errno));
+//         exit(1);
+//       }
+//       fprintf(stdout, "quit connection: fd[%d]\n", clifd);
+//       return 1;
+//     }
+
+//     if (strncmp(buf, "end", sizeof("end") - 1) == 0) {
+//       break;
+//     }
+//   }
+
+//   if (read_size == -1) {
+//     fprintf(stderr, "recv: %s\n", strerror(errno));
+//     exit(1);
+//   }
+//   if (read_size == 0) {  // closed from client.
+//     // epoll automatically removes clifd from interest sets.
+//     if (close(clifd) == -1) {
+//       fprintf(stderr, "close: %s\n", strerror(errno));
+//       exit(1);
+//     }
+//     fprintf(stdout, "close connection: fd[%d]\n", clifd);
+//     return 1;
+//   }
+//   return 0;
+// }
 
 static void accept_conn(int epfd, int listenfd) {
   sockaddr_in cliaddr;
