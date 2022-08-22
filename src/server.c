@@ -29,7 +29,6 @@ const int BUF_SIZE = 4096;
 static void epoll_add_infd(int epfd, int fd);
 static void epoll_del_fd(int epfd, int fd);
 static void accept_conn(int epfd, int listenfd);
-// static int read_clifd(int epfd, int clifd, char *buf);
 static int read_msg(int clifd, char *const buf);
 static void *thread(void *arg);
 
@@ -115,20 +114,21 @@ static void *thread(void *arg) {
   const int epfd = ctx->epfd;
   const int clifd = ctx->clifd;
 
-  char *buf = (char *)calloc(BUF_SIZE, sizeof(char));
-  const int closed = read_msg(clifd, buf);
+  char *msg = (char *)calloc(BUF_SIZE, sizeof(char));
+  const int closed = read_msg(clifd, msg);
 
   if (!closed) {
-    const int res = call_cmd(buf);
-    char send[10];
-    sprintf(send, "%d\r\n", res);
+    char buf[100];
+    const int res = call_cmd(msg, buf);
+    char send[120];
+    sprintf(send, "[%d]%s\r\n", res, buf);
     write(clifd, send, strlen(send));
 
     epoll_add_infd(epfd, clifd);
   }
 
   free(arg);
-  free(buf);
+  free(msg);
   fprintf(stderr, "thread end: tid[%lu]\n", tid);
 
 #ifdef USE_PTHREAD
@@ -179,47 +179,6 @@ static int read_msg(int clifd, char *const buf) {
   }
   return 0;
 }
-
-// static int read_clifd(int epfd, int clifd, char *buf) {
-//   int read_size = 0;
-//   while ((read_size = read(clifd, buf, sizeof(buf))) > 0) {
-//     if (buf[read_size - 1] == '\n') {
-//       buf[read_size - 1] = '\0';
-//     } else {
-//       buf[read_size] = '\0';
-//     }
-//     fprintf(stdout, "recved msg: %s\n", buf);
-
-//     if (strncmp(buf, "quit", sizeof("quit") - 1) == 0) {
-//       // epoll automatically removes clifd from interest sets.
-//       if (close(clifd) == -1) {
-//         fprintf(stderr, "close: %s\n", strerror(errno));
-//         exit(1);
-//       }
-//       fprintf(stdout, "quit connection: fd[%d]\n", clifd);
-//       return 1;
-//     }
-
-//     if (strncmp(buf, "end", sizeof("end") - 1) == 0) {
-//       break;
-//     }
-//   }
-
-//   if (read_size == -1) {
-//     fprintf(stderr, "recv: %s\n", strerror(errno));
-//     exit(1);
-//   }
-//   if (read_size == 0) {  // closed from client.
-//     // epoll automatically removes clifd from interest sets.
-//     if (close(clifd) == -1) {
-//       fprintf(stderr, "close: %s\n", strerror(errno));
-//       exit(1);
-//     }
-//     fprintf(stdout, "close connection: fd[%d]\n", clifd);
-//     return 1;
-//   }
-//   return 0;
-// }
 
 static void accept_conn(int epfd, int listenfd) {
   sockaddr_in cliaddr;

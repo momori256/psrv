@@ -1,1 +1,1 @@
-int call_cmd(const char *const msg);
+int call_cmd(const char *const msg, char *const buf);

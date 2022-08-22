@@ -1,9 +1,10 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
 
-static int add(int x, int y);
-static int sub(int x, int y);
+static int add(char *const s, char *const buf);
+static int length(const char *const s, char *const buf);
 
 const int NAME_SIZE = 10;
 
@@ -15,14 +16,14 @@ static int streq(const char *const s1, const char *const s2) {
   return strncmp(s1, s2, l1) == 0;
 }
 
-int call_cmd(const char *const msg) {
-  // format: [<command> (<data-type> <data-size> <data>)*].
-  // format: [<command> <int> <int>].
+int call_cmd(const char *const msg, char *const result) {
+  // format: [<command> <arg string>].
   const size_t len = strlen(msg);
   char *const buf = (char *)malloc(len + 1);
   strncpy(buf, msg, len);
 
-  char *beg = buf, *end = buf;
+  const char *beg = buf;
+  char *end = buf;
   char cmdname[NAME_SIZE];
   {
     end = strchr(end, ' ');
@@ -30,6 +31,21 @@ int call_cmd(const char *const msg) {
     strcpy(cmdname, beg);
     beg = end;
   }
+
+  int ret = -1;
+  if (streq(cmdname, "add")) {
+    ret = add(end, result);
+  } else if (streq(cmdname, "length")) {
+    ret = length(end, result);
+  }
+
+  free(buf);
+  return ret;
+}
+
+static int add(char *const s, char *buf) {
+  char *beg = s;
+  char *end = s;
 
   char arg0[10];
   {
@@ -47,20 +63,11 @@ int call_cmd(const char *const msg) {
     beg = end;
   }
 
-  free(buf);
-
-  if (streq(cmdname, "add")) {
-    return add(atoi(arg0), atoi(arg1));
-  } else if (streq(cmdname, "sub")) {
-    return sub(atoi(arg0), atoi(arg1));
-  }
-  return -1;
+  sprintf(buf, "%d", atoi(arg0) + atoi(arg1));
+  return 0;
 }
 
-static int add(int x, int y) {
-  return x + y;
-}
-
-static int sub(int x, int y) {
-  return x - y;
+static int length(const char *const s, char *const buf) {
+  sprintf(buf, "%llu", (unsigned long long)strlen(s));
+  return 0;
 }
