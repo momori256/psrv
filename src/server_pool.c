@@ -3,19 +3,18 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <pthread.h>
-#include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "cmd.h"
+#include "cqueue.h"
 #include "sock_util.h"
-
-#define USE_PTHREAD
 
 typedef struct epoll_event epoll_event;
 typedef struct sockaddr_in sockaddr_in;
@@ -33,14 +32,11 @@ static void accept_conn(int epfd, int listenfd);
 static int read_msg(int clifd, char *const buf);
 static void *thread(void *arg);
 
-int echo() {
-#ifdef USE_PTHREAD
-  printf("use pthread.\n");
-#else
-  printf("not use pthread.\n");
-#endif
+static int epfd = -1;
+static Cqueue *cq = NULL;
 
-  const int epfd = epoll_create1(0);
+int echo_pool() {
+  epfd = epoll_create1(0);
   if (epfd == -1) {
     fprintf(stderr, "epoll_create1: %s\n", strerror(errno));
     exit(1);
@@ -48,8 +44,17 @@ int echo() {
   const int listenfd = create_listenfd("localhost", "8080");
   epoll_add_infd(epfd, listenfd);
 
-  const int MAX_EVENTS = 10;
+  const int MAX_EVENTS = 100;
   epoll_event events[MAX_EVENTS];
+
+  const int CAPACITY = 100;
+  cq = cq_init(CAPACITY);
+
+  const int NTHREAD = 4;
+  for (int i = 0; i < NTHREAD; ++i) {
+    pthread_t tid;
+    pthread_create(&tid, NULL, thread, NULL);
+  }
 
   while (1) {
     const int nfds = epoll_wait(epfd, events, MAX_EVENTS, -1);
@@ -66,24 +71,8 @@ int echo() {
 
       const int clifd = events[i].data.fd;
       epoll_del_fd(epfd, clifd);
-
-      ReadCtx *const ctx = (ReadCtx *)malloc(sizeof(ReadCtx));
-      {
-        ctx->epfd = epfd;
-        ctx->clifd = clifd;
-      }
-
-#ifdef USE_PTHREAD
-      // push ctx.
-      pthread_t tid;
-      const int err = pthread_create(&tid, NULL, thread, (void *)ctx);
-      if (err) {
-        fprintf(stderr, "pthread_create: %d\n", err);
-        exit(1);
-      }
-#else
-      thread((void *)ctx);
-#endif
+      printf("push clifd[%d].\n", clifd);
+      cq_push(cq, clifd);
     }
   }
   return 0;
@@ -112,32 +101,33 @@ static void *thread(void *arg) {
   fprintf(stderr, "thread begin: tid[%lu]\n", tid);
   pthread_detach(tid);
 
-  const ReadCtx *const ctx = (ReadCtx *)arg;
-  const int epfd = ctx->epfd;
-  const int clifd = ctx->clifd;
+  char *const msg = (char *)malloc(BUF_SIZE * sizeof(char));
+  while (1) {
+    const int clifd = cq_pop(cq);
+    if (clifd < 0) {
+      continue;
+    }
+    const int closed = read_msg(clifd, msg);
 
-  char *msg = (char *)calloc(BUF_SIZE, sizeof(char));
-  const int closed = read_msg(clifd, msg);
+    if (!closed) {
+      char buf[100];
+      const int res = call_cmd(msg, buf);
+      char send[120];
+      sprintf(send, "[%d]%s from [%llu]\r\n", res, buf,
+              (unsigned long long)tid);
+      write(clifd, send, strlen(send));
 
-  if (!closed) {
-    char buf[100];
-    const int res = call_cmd(msg, buf);
-    char send[120];
-    sprintf(send, "[%d]%s\r\n", res, buf);
-    write(clifd, send, strlen(send));
+      epoll_add_infd(epfd, clifd);
+    }
+    memset(msg, 0, BUF_SIZE * sizeof(char));
 
-    epoll_add_infd(epfd, clifd);
+    printf("proceeded by thread[%llu]\n", (unsigned long long)tid);
   }
 
-  free(arg);
   free(msg);
   fprintf(stderr, "thread end: tid[%lu]\n", tid);
 
-#ifdef USE_PTHREAD
   pthread_exit(NULL);
-#else
-  return NULL;
-#endif
 }
 
 static int endswith(const char *const s, const char *const end) {
@@ -165,7 +155,7 @@ static int read_msg(int clifd, char *const buf) {
     }
   }
 
-  printf("read_msg: %s\n", buf);
+  // printf("read_msg [%s].\n", buf);
   if (nread == -1) {
     fprintf(stderr, "recv: %s\n", strerror(errno));
     exit(1);
