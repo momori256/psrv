@@ -1,4 +1,4 @@
-FLAGS = -Wall -c -g -std=c99
+FLAGS = -Wall -c -g -std=c99 -ldl -lpthread
 MACROS = -D_POSIX_C_SOURCE=200112L
 
 psrv: main.o server.o server_pool.o client.o sock_util.o cmd.o cqueue.o test.o

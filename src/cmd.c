@@ -1,3 +1,5 @@
+#include <dlfcn.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,6 +39,22 @@ int call_cmd(const char *const msg, char *const result) {
     ret = add(end, result);
   } else if (streq(cmdname, "length")) {
     ret = length(end, result);
+  } else if (streq(cmdname, "f")) {
+    void *handle = dlopen("./lib/libf.so", RTLD_LAZY);
+    if (!handle) {
+      fprintf(stderr, "dlopen: %s\n", dlerror());
+      exit(1);
+    }
+    dlerror();
+    int (*f)(const char *const, char *const) =
+        (int (*)(const char *const, char *const))dlsym(handle, "f");
+    const char *const err = dlerror();
+    if (err != NULL) {
+      fprintf(stderr, "dlsym: %s\n", err);
+      exit(1);
+    }
+    ret = f(end, result);
+    dlclose(handle);
   }
 
   free(buf);
